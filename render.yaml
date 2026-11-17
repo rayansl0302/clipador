@@ -1,0 +1,302 @@
+# Blueprint do Clip Studio.
+# Campos conferidos em https://render.com/docs/blueprint-spec
+# Plano gratuito dorme quando ocioso e não serve para produção.
+# Para dar mais RAM ao FFmpeg, troque o plano do clip-worker (1c-2g = 2 GB; 2c-4g = 4 GB).
+
+services:
+  - type: web
+    name: clip-web
+    runtime: docker
+    plan: 0.5c-512mb
+    region: oregon
+    dockerfilePath: ./apps/web/Dockerfile
+    dockerContext: ./apps/web
+    healthCheckPath: /
+    envVars:
+      - key: API_URL
+        fromService:
+          name: clip-api
+          type: web
+          property: hostport
+      - key: API_PUBLIC_URL
+        sync: false
+      - key: NODE_ENV
+        value: production
+
+  - type: web
+    name: clip-api
+    runtime: docker
+    plan: 0.5c-512mb
+    region: oregon
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: ./apps/api
+    healthCheckPath: /health
+    envVars:
+      - key: CLIP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: clip-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: clip-redis
+          type: keyvalue
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: lax
+      - key: ALLOW_SIGNUP
+        value: "true"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_PUBLIC_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: TRANSCRIBE_PROVIDER
+        value: local
+      - key: FASTER_WHISPER_MODEL
+        value: base
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: heuristic
+      - key: LLM_MODEL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: POSTIZ_URL
+        sync: false
+      - key: POSTIZ_API_KEY
+        sync: false
+      - key: MAX_VIDEO_DURATION_SECONDS
+        value: "7200"
+      - key: MAX_UPLOAD_BYTES
+        value: "524288000"
+      - key: WORKER_CONCURRENCY
+        value: "1"
+
+  - type: worker
+    name: clip-worker
+    runtime: docker
+    plan: 1c-2g
+    region: oregon
+    dockerfilePath: ./apps/worker/Dockerfile
+    dockerContext: .
+    envVars:
+      - key: CLIP_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: clip-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: clip-redis
+          type: keyvalue
+          property: connectionString
+      - key: JWT_SECRET
+        fromService:
+          name: clip-api
+          type: web
+          envVarKey: JWT_SECRET
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_PUBLIC_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: TRANSCRIBE_PROVIDER
+        value: local
+      - key: FASTER_WHISPER_MODEL
+        value: base
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: heuristic
+      - key: LLM_MODEL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: MAX_VIDEO_DURATION_SECONDS
+        value: "7200"
+      - key: MAX_UPLOAD_BYTES
+        value: "524288000"
+      - key: WORKER_CONCURRENCY
+        value: "1"
+
+  - type: keyvalue
+    name: clip-redis
+    region: oregon
+    plan: 256mb
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+  # Postiz oficial, empacotado em infra/postiz/Dockerfile (ajusta a porta do nginx e o
+  # endereço do Temporal; os dois pontos foram testados localmente contra a imagem).
+  # Disco do Render é efêmero: o storage é o R2, não o disco local.
+  - type: web
+    name: postiz
+    runtime: docker
+    plan: 1c-2g
+    region: oregon
+    dockerfilePath: ./infra/postiz/Dockerfile
+    dockerContext: ./infra/postiz
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: postiz-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: postiz-redis
+          type: keyvalue
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: IS_GENERAL
+        value: "true"
+      - key: DISABLE_REGISTRATION
+        value: "false"
+      - key: RUN_CRON
+        value: "true"
+      - key: STORAGE_PROVIDER
+        value: cloudflare
+      - key: BACKEND_INTERNAL_URL
+        value: http://localhost:3000
+      # O Dockerfile monta TEMPORAL_ADDRESS = TEMPORAL_HOST:7233.
+      - key: TEMPORAL_HOST
+        fromService:
+          name: temporal
+          type: pserv
+          property: host
+      - key: FRONTEND_URL
+        sync: false
+      - key: NEXT_PUBLIC_BACKEND_URL
+        sync: false
+      - key: MAIN_URL
+        sync: false
+      - key: CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: CLOUDFLARE_ACCESS_KEY
+        sync: false
+      - key: CLOUDFLARE_SECRET_ACCESS_KEY
+        sync: false
+      - key: CLOUDFLARE_BUCKETNAME
+        sync: false
+      - key: CLOUDFLARE_BUCKET_URL
+        sync: false
+      - key: CLOUDFLARE_REGION
+        value: auto
+
+  # Temporal que o Postiz exige desde a v2.12. Imagem oficial de desenvolvimento/pequeno porte,
+  # sem Elasticsearch: SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES evita os 2 atributos Text que ela
+  # registra por padrão e estouram o limite de 3 do visibility em SQL quando o Postiz registra
+  # os seus (testado localmente). Visibility e estado ficam em dois Postgres separados porque
+  # o usuário do Render não cria bancos (SKIP_POSTGRES_DB_CREATION).
+  # TODO(verificar no primeiro deploy): conexão do Temporal com o Postgres do Render sem TLS.
+  - type: pserv
+    name: temporal
+    runtime: image
+    plan: 1c-2g
+    region: oregon
+    image:
+      url: docker.io/temporalio/auto-setup:1.28.1
+    envVars:
+      - key: DB
+        value: postgres12
+      - key: SKIP_DB_CREATE
+        value: "true"
+      - key: SKIP_POSTGRES_DB_CREATION
+        value: "true"
+      - key: SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES
+        value: "true"
+      - key: DBNAME
+        fromDatabase:
+          name: temporal-postgres
+          property: database
+      - key: DB_PORT
+        fromDatabase:
+          name: temporal-postgres
+          property: port
+      - key: POSTGRES_USER
+        fromDatabase:
+          name: temporal-postgres
+          property: user
+      - key: POSTGRES_PWD
+        fromDatabase:
+          name: temporal-postgres
+          property: password
+      - key: POSTGRES_SEEDS
+        fromDatabase:
+          name: temporal-postgres
+          property: host
+      - key: VISIBILITY_DBNAME
+        fromDatabase:
+          name: temporal-visibility-postgres
+          property: database
+      - key: VISIBILITY_POSTGRES_USER
+        fromDatabase:
+          name: temporal-visibility-postgres
+          property: user
+      - key: VISIBILITY_POSTGRES_PWD
+        fromDatabase:
+          name: temporal-visibility-postgres
+          property: password
+      - key: VISIBILITY_POSTGRES_SEEDS
+        fromDatabase:
+          name: temporal-visibility-postgres
+          property: host
+
+  - type: keyvalue
+    name: postiz-redis
+    region: oregon
+    plan: 256mb
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+databases:
+  - name: clip-postgres
+    region: oregon
+    plan: 0.1c-256mb
+    postgresMajorVersion: "16"
+
+  - name: postiz-postgres
+    region: oregon
+    plan: 0.1c-256mb
+    postgresMajorVersion: "16"
+
+  - name: temporal-postgres
+    databaseName: temporal
+    region: oregon
+    plan: 0.1c-256mb
+    postgresMajorVersion: "16"
+
+  - name: temporal-visibility-postgres
+    databaseName: temporal_visibility
+    region: oregon
+    plan: 0.1c-256mb
+    postgresMajorVersion: "16"

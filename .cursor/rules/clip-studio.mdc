@@ -1,0 +1,33 @@
+---
+description: Regras do Clip Studio válidas em todas as fases
+alwaysApply: true
+---
+
+# Clip Studio
+
+Uma fase por vez. Ao terminar: rode, teste, liste o que foi feito e o que falta, e pare até o usuário dizer "próxima fase".
+
+## Stack (não trocar sem perguntar)
+
+- Monorepo: `apps/web`, `apps/api`, `infra/`
+- Web: Next.js (App Router) + TypeScript + Tailwind + shadcn/ui
+- API: Python 3.12 + FastAPI + SQLAlchemy 2 + Alembic
+- Fila: Redis + RQ. Worker em Python, mesmo código da API
+- Banco: PostgreSQL. Storage: S3 (MinIO no dev, Cloudflare R2 em produção)
+- Mídia: yt-dlp + FFmpeg
+- Transcrição: `TRANSCRIBE_PROVIDER` = groq (padrão) | openai | local
+- Cortes: `LLM_PROVIDER` (padrão Anthropic), JSON validado por Pydantic
+- Deploy: Render via `render.yaml`. `docker-compose.yml` só para dev
+- Postiz é serviço separado. Usar a API pública. Não forkar nem reescrever
+
+## Regras
+
+- Segredos só em env. Mantenha `.env.example` atualizado. Nunca commite `.env`.
+- Download, transcrição e render rodam no worker, nunca no HTTP. Job tem status (`queued`/`running`/`done`/`failed`), progresso e erro legível.
+- Limites por env: duração máxima do vídeo, tamanho máximo de upload, jobs simultâneos.
+- Arquivo de trabalho em `/tmp`, apagado ao fim do job. Resultado (áudio, clipe) vai para S3/R2. Não dependa de disco local no Render.
+- Dev e produção usam a mesma configuração. Mudam só as variáveis de ambiente.
+- Não invente endpoint ou parâmetro de API externa. Se incerto, marque `TODO(verificar)` e avise.
+- Código tipado, funções pequenas, log estruturado, erro explícito. Pytest na lógica de pipeline (LLM, legenda ASS, FFmpeg).
+- README atualizado: como rodar, variáveis e decisões.
+- Sem dependência desnecessária. Se a decisão mudar escopo ou custo, pergunte antes.
